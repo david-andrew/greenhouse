@@ -1,0 +1,12 @@
+[workspace]
+authors = ["David Samson <david.andrew.engineer@gmail.com>"]
+channels = ["conda-forge"]
+name = "greenhouse"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+matplotlib = ">=3.10.6,<4"
+numpy = ">=2.3.2,<3"
