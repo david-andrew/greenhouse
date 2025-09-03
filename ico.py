@@ -189,6 +189,49 @@ def mesh_scaled(mesh: Mesh, scale: float, center: Optional[np.ndarray] = None) -
     return Mesh(new_points, new_edges, new_faces)
 
 
+def compute_face_lengths_and_angles(points: np.ndarray, faces: List[Tuple[int, int, int]]):
+    """For each face (i,j,k), compute edge lengths (|AB|,|BC|,|CA|) and internal angles at A,B,C in degrees.
+
+    Returns list of tuples: (lengths_tuple, angles_tuple)
+    """
+    results = []
+    for (i, j, k) in faces:
+        A, B, C = points[i], points[j], points[k]
+        AB = B - A; BC = C - B; CA = A - C
+        BA = -AB; CB = -BC; AC = -CA
+        len_AB = float(np.linalg.norm(AB))
+        len_BC = float(np.linalg.norm(BC))
+        len_CA = float(np.linalg.norm(CA))
+
+        def angle_between(u: np.ndarray, v: np.ndarray) -> float:
+            nu = float(np.linalg.norm(u)); nv = float(np.linalg.norm(v))
+            if nu == 0.0 or nv == 0.0:
+                return 0.0
+            cosang = float(np.dot(u, v) / (nu * nv))
+            cosang = max(-1.0, min(1.0, cosang))
+            return float(np.degrees(np.arccos(cosang)))
+
+        angle_A = angle_between(AB, AC)
+        angle_B = angle_between(BA, BC)
+        angle_C = angle_between(CA, CB)
+
+        results.append(((len_AB, len_BC, len_CA), (angle_A, angle_B, angle_C)))
+    return results
+
+
+def print_mesh_face_metrics(mesh: Mesh, decimals: int = 3) -> None:
+    if not mesh.faces:
+        print("No faces to analyze.")
+        return
+    metrics = compute_face_lengths_and_angles(mesh.points, mesh.faces)
+    fmt = f"{{:.{decimals}f}}"
+    for idx, ((l_ab, l_bc, l_ca), (ang_a, ang_b, ang_c)) in enumerate(metrics):
+        lengths_str = f"(AB={fmt.format(l_ab)}, BC={fmt.format(l_bc)}, CA={fmt.format(l_ca)})"
+        angles_str = f"(A={fmt.format(ang_a)}°, B={fmt.format(ang_b)}°, C={fmt.format(ang_c)}°)"
+        i, j, k = mesh.faces[idx]
+        print(f"Face {idx:03d} verts=({i},{j},{k}) lengths={lengths_str} angles={angles_str}")
+
+
 def subdivided_icosahedron_mesh(N: int, rotate_x_degrees: float = 0.0) -> Mesh:
     P_unit, edges, faces = subdivided_icosahedron_geometry(N, rotate_x_degrees=rotate_x_degrees)
     return Mesh(P_unit, edges, faces)
@@ -235,3 +278,5 @@ if __name__ == "__main__":
     # Scale outward by 1.5x
     mesh = mesh_scaled(mesh, scale=diameter / 2)
     plot_mesh(mesh, show_points=True, point_size=6, show_faces=True, face_color='tab:blue', face_alpha=0.2)
+    # Print per-face edge lengths and internal angles
+    print_mesh_face_metrics(mesh, decimals=3)
