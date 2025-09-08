@@ -365,6 +365,14 @@ def plot_joint_vectors(mesh: Mesh, joint_index: int, align_to_z: bool = False, s
     ax.set_title(f'Joint {joint_index} vectors' + (' (aligned +Z)' if align_to_z else ''))
     plt.show()
 
+
+def plot_all_joints_vectors(mesh: Mesh, align_to_z: bool = False, scale: float = 1.0, indices: Optional[List[int]] = None):
+    """Plot joint vectors for each joint in indices (or all joints if None)."""
+    if indices is None:
+        indices = list(range(mesh.points.shape[0]))
+    for idx in indices:
+        plot_joint_vectors(mesh, joint_index=idx, align_to_z=align_to_z, scale=scale)
+
 # ---- Example run ----
 if __name__ == "__main__":
     N = 1  # change me
@@ -382,3 +390,5 @@ if __name__ == "__main__":
     print_joint_unit_vectors(mesh, decimals=3, align_to_z=True)
     # Visualize a single joint's rotated vectors
     plot_joint_vectors(mesh, joint_index=0, align_to_z=True, scale=diameter*0.05)
+    # Or visualize all joints (this will open many figures)
+    # plot_all_joints_vectors(mesh, align_to_z=True, scale=diameter*0.05)
