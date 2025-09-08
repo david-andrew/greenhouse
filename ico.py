@@ -12,6 +12,33 @@ def _rotation_matrix_x(degrees):
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
 
 
+def _rotation_matrix_from_a_to_b(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a = np.asarray(a, dtype=float).reshape(3,)
+    b = np.asarray(b, dtype=float).reshape(3,)
+    na = np.linalg.norm(a); nb = np.linalg.norm(b)
+    if na == 0.0 or nb == 0.0:
+        return np.eye(3)
+    a = a / na; b = b / nb
+    c = float(np.dot(a, b))
+    if c > 0.999999:
+        return np.eye(3)
+    if c < -0.999999:
+        # 180-degree rotation: choose any axis orthogonal to a
+        ref = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        axis = np.cross(a, ref)
+        axis_norm = float(np.linalg.norm(axis))
+        if axis_norm == 0.0:
+            return -np.eye(3)
+        axis = axis / axis_norm
+        K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]], dtype=float)
+        # theta = pi => sin=0, 1-cos=2
+        return np.eye(3) + 2.0 * (K @ K)
+    v = np.cross(a, b)
+    s = float(np.linalg.norm(v))
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]], dtype=float)
+    return np.eye(3) + K + K @ K * ((1.0 - c) / (s * s))
+
+
 def icosahedron(rotate_x_degrees=0.0):
     """Return (V, F): 12 vertices and 20 triangular faces (indexing into V).
 
@@ -232,7 +259,7 @@ def print_mesh_face_metrics(mesh: Mesh, decimals: int = 3) -> None:
         print(f"Face {idx:03d} verts=({i},{j},{k}) lengths={lengths_str} angles={angles_str}")
 
 
-def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]]):
+def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]], align_to_z: bool = False):
     """Return list where entry i is a list of unit vectors along each incident edge at vertex i.
 
     Each vector points outward from the joint (vertex i) toward its neighbor, as if the joint
@@ -246,22 +273,28 @@ def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]])
     joint_vectors: List[List[np.ndarray]] = []
     for i in range(num_points):
         origin = points[i]
+        R = None
+        if align_to_z:
+            R = _rotation_matrix_from_a_to_b(origin, np.array([0.0, 0.0, 1.0], dtype=float))
         vecs: List[np.ndarray] = []
         for j in neighbors[i]:
             v = points[j] - origin
             n = float(np.linalg.norm(v))
             if n == 0.0:
                 continue
-            vecs.append(v / n)
+            u = v / n
+            if R is not None:
+                u = R @ u
+            vecs.append(u)
         joint_vectors.append(vecs)
     return joint_vectors
 
 
-def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3) -> None:
-    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges)
+def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3, align_to_z: bool = False) -> None:
+    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges, align_to_z=align_to_z)
     fmt = f"{{:.{decimals}f}}"
     for i, vecs in enumerate(vecs_per_joint):
-        print(f"Joint {i:03d} ({len(vecs)} edges):")
+        print(f"Joint {i:03d} ({len(vecs)} edges){' [aligned to +Z]' if align_to_z else ''}:")
         for k, v in enumerate(vecs):
             print(f"  u{k}: ({fmt.format(v[0])}, {fmt.format(v[1])}, {fmt.format(v[2])})")
 
@@ -301,6 +334,37 @@ def plot_mesh(mesh: Mesh, show_points: bool = True, point_size: int = 100, show_
     ax.set_title('Mesh')
     plt.show()
 
+
+def plot_joint_vectors(mesh: Mesh, joint_index: int, align_to_z: bool = False, scale: float = 1.0):
+    """Visualize one joint: its vectors and the alignment.
+
+    - If align_to_z, rotates the vectors so the joint normal (position) points to +Z.
+    - Plots vectors as arrows from the origin in the rotated frame.
+    """
+    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges, align_to_z=align_to_z)
+    if joint_index < 0 or joint_index >= len(vecs_per_joint):
+        raise IndexError("joint_index out of range")
+    vecs = vecs_per_joint[joint_index]
+
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_box_aspect((1,1,1))
+    # draw unit sphere grid for reference
+    u = np.linspace(0, 2*np.pi, 40)
+    v = np.linspace(0, np.pi, 20)
+    xs = np.outer(np.cos(u), np.sin(v))
+    ys = np.outer(np.sin(u), np.sin(v))
+    zs = np.outer(np.ones_like(u), np.cos(v))
+    ax.plot_wireframe(xs, ys, zs, color='lightgray', linewidth=0.3, rstride=4, cstride=4)
+    # plot vectors
+    for q in vecs:
+        ax.plot([0, q[0]*scale], [0, q[1]*scale], [0, q[2]*scale], color='k', linewidth=2.0)
+    ax.scatter([0], [0], [0], color='r', s=30)
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    set_axes_equal(ax)
+    ax.set_title(f'Joint {joint_index} vectors' + (' (aligned +Z)' if align_to_z else ''))
+    plt.show()
+
 # ---- Example run ----
 if __name__ == "__main__":
     N = 1  # change me
@@ -315,4 +379,6 @@ if __name__ == "__main__":
     # Print per-face edge lengths and internal angles
     print_mesh_face_metrics(mesh, decimals=3)
     # Print unit vectors for each joint (vertex)
-    print_joint_unit_vectors(mesh, decimals=3)
+    print_joint_unit_vectors(mesh, decimals=3, align_to_z=True)
+    # Visualize a single joint's rotated vectors
+    plot_joint_vectors(mesh, joint_index=0, align_to_z=True, scale=diameter*0.05)
