@@ -232,6 +232,40 @@ def print_mesh_face_metrics(mesh: Mesh, decimals: int = 3) -> None:
         print(f"Face {idx:03d} verts=({i},{j},{k}) lengths={lengths_str} angles={angles_str}")
 
 
+def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]]):
+    """Return list where entry i is a list of unit vectors along each incident edge at vertex i.
+
+    Each vector points outward from the joint (vertex i) toward its neighbor, as if the joint
+    were translated to the origin (0,0,0).
+    """
+    num_points = points.shape[0]
+    neighbors: List[List[int]] = [[] for _ in range(num_points)]
+    for i, j in edges:
+        neighbors[i].append(j)
+        neighbors[j].append(i)
+    joint_vectors: List[List[np.ndarray]] = []
+    for i in range(num_points):
+        origin = points[i]
+        vecs: List[np.ndarray] = []
+        for j in neighbors[i]:
+            v = points[j] - origin
+            n = float(np.linalg.norm(v))
+            if n == 0.0:
+                continue
+            vecs.append(v / n)
+        joint_vectors.append(vecs)
+    return joint_vectors
+
+
+def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3) -> None:
+    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges)
+    fmt = f"{{:.{decimals}f}}"
+    for i, vecs in enumerate(vecs_per_joint):
+        print(f"Joint {i:03d} ({len(vecs)} edges):")
+        for k, v in enumerate(vecs):
+            print(f"  u{k}: ({fmt.format(v[0])}, {fmt.format(v[1])}, {fmt.format(v[2])})")
+
+
 def subdivided_icosahedron_mesh(N: int, rotate_x_degrees: float = 0.0) -> Mesh:
     P_unit, edges, faces = subdivided_icosahedron_geometry(N, rotate_x_degrees=rotate_x_degrees)
     return Mesh(P_unit, edges, faces)
@@ -280,3 +314,5 @@ if __name__ == "__main__":
     plot_mesh(mesh, show_points=True, point_size=6, show_faces=True, face_color='tab:blue', face_alpha=0.2)
     # Print per-face edge lengths and internal angles
     print_mesh_face_metrics(mesh, decimals=3)
+    # Print unit vectors for each joint (vertex)
+    print_joint_unit_vectors(mesh, decimals=3)
