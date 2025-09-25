@@ -1,5 +1,7 @@
 import numpy as np
 import math
+import os
+import csv
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Callable
 import matplotlib.pyplot as plt
@@ -373,14 +375,62 @@ def plot_all_joints_vectors(mesh: Mesh, align_to_z: bool = False, scale: float =
     for idx in indices:
         plot_joint_vectors(mesh, joint_index=idx, align_to_z=align_to_z, scale=scale)
 
+
+UNIT_TO_METERS = {
+    'm': 1.0,
+    'meter': 1.0,
+    'meters': 1.0,
+    'mm': 1e-3,
+    'millimeter': 1e-3,
+    'millimeters': 1e-3,
+    'in': 0.0254,
+    'inch': 0.0254,
+    'inches': 0.0254,
+    'ft': 0.3048,
+    'foot': 0.3048,
+    'feet': 0.3048,
+}
+
+
+def _unit_conversion_factor(source_unit: str, target_unit: str) -> float:
+    s = source_unit.lower(); t = target_unit.lower()
+    if s not in UNIT_TO_METERS or t not in UNIT_TO_METERS:
+        raise ValueError(f"Unsupported unit. Source={source_unit}, Target={target_unit}")
+    return UNIT_TO_METERS[s] / UNIT_TO_METERS[t]
+
+
+def export_joint_vectors_csv(
+    mesh: Mesh,
+    output_dir: str = 'output',
+    align_to_z: bool = True,
+    vector_length: float = 0.05,
+) -> None:
+    """Write one CSV per joint to output_dir with origin and rotated unit vectors.
+
+    Each file: first line is 0,0,0, then one line per incident edge unit vector tip.
+    Coordinates are scaled by unit conversion from source_unit to target_unit.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges, align_to_z=align_to_z)
+    for i, vecs in enumerate(vecs_per_joint):
+        path = os.path.join(output_dir, f"joint_{i:03d}.csv")
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            for k, v in enumerate(vecs):
+                edge_id = f"J{i:03d}_E{k:02d}"
+                # origin
+                writer.writerow([edge_id, 0.0, 0.0, 0.0])
+                # tip
+                writer.writerow([edge_id, float(v[0]) * vector_length, float(v[1]) * vector_length, float(v[2]) * vector_length])
+
 # ---- Example run ----
 if __name__ == "__main__":
-    N = 1  # change me
+    N = 0  # change me
     diameter = 28 * 12 # inches (TODO: model in mm)
     # Rotate the base icosahedron and build Mesh
     mesh = subdivided_icosahedron_mesh(N, rotate_x_degrees=30)
     # Example: keep only points with z >= -0.1
-    mesh = mesh_keep_points_with_z_between(mesh, min_z=-0.1)
+    mesh = mesh_keep_points_with_z_between(mesh, min_z=-0.5)
     # Scale outward by 1.5x
     mesh = mesh_scaled(mesh, scale=diameter / 2)
     plot_mesh(mesh, show_points=True, point_size=6, show_faces=True, face_color='tab:blue', face_alpha=0.2)
@@ -389,6 +439,8 @@ if __name__ == "__main__":
     # Print unit vectors for each joint (vertex)
     print_joint_unit_vectors(mesh, decimals=3, align_to_z=True)
     # Visualize a single joint's rotated vectors
-    plot_joint_vectors(mesh, joint_index=0, align_to_z=True, scale=diameter*0.05)
+    # plot_joint_vectors(mesh, joint_index=0, align_to_z=True, scale=diameter*0.05)
     # Or visualize all joints (this will open many figures)
     # plot_all_joints_vectors(mesh, align_to_z=True, scale=diameter*0.05)
+    # Export CSVs for each joint (aligned vectors) with fixed vector length
+    export_joint_vectors_csv(mesh, output_dir='output', align_to_z=True, vector_length=0.05)
