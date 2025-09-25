@@ -3,7 +3,7 @@ import math
 import os
 import csv
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Callable
+from typing import List, Tuple, Optional, Callable, Dict
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -292,6 +292,41 @@ def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]],
     return joint_vectors
 
 
+def _joint_rotation_invariant_signature(vecs: List[np.ndarray], decimals: int = 6) -> Tuple[int, Tuple[float, ...]]:
+    """Compute a rotation-invariant signature for a set of incident unit vectors.
+
+    The signature is: (degree, sorted pairwise dot products, rounded to decimals).
+    Invariant to global rotation and permutation of incident edges.
+    """
+    m = len(vecs)
+    if m == 0:
+        return (0, tuple())
+    dots: List[float] = []
+    for i in range(m):
+        vi = np.asarray(vecs[i], dtype=float).reshape(3,)
+        for j in range(i + 1, m):
+            vj = np.asarray(vecs[j], dtype=float).reshape(3,)
+            d = float(np.dot(vi, vj))
+            dots.append(float(np.round(d, decimals)))
+    dots.sort()
+    return (m, tuple(dots))
+
+
+def group_joints_by_signature(mesh: Mesh, align_to_z: bool = True, decimals: int = 6):
+    """Group joint indices by rotation-invariant signature of incident vectors.
+
+    Returns list of dicts: { 'signature': sig, 'indices': [...], 'repr_vecs': [...] }.
+    """
+    vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges, align_to_z=align_to_z)
+    groups: Dict[Tuple[int, Tuple[float, ...]], Dict] = {}
+    for idx, vecs in enumerate(vecs_per_joint):
+        sig = _joint_rotation_invariant_signature(vecs, decimals=decimals)
+        if sig not in groups:
+            groups[sig] = {'signature': sig, 'indices': [idx], 'repr_vecs': vecs}
+        else:
+            groups[sig]['indices'].append(idx)
+    keys_sorted = sorted(groups.keys())
+    return [groups[k] for k in keys_sorted]
 def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3, align_to_z: bool = False) -> None:
     vecs_per_joint = compute_joint_unit_vectors(mesh.points, mesh.edges, align_to_z=align_to_z)
     fmt = f"{{:.{decimals}f}}"
@@ -299,6 +334,17 @@ def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3, align_to_z: bool = F
         print(f"Joint {i:03d} ({len(vecs)} edges){' [aligned to +Z]' if align_to_z else ''}:")
         for k, v in enumerate(vecs):
             print(f"  u{k}: ({fmt.format(v[0])}, {fmt.format(v[1])}, {fmt.format(v[2])})")
+
+
+def print_deduplicated_joint_types(mesh: Mesh, decimals: int = 3, align_to_z: bool = True) -> None:
+    groups = group_joints_by_signature(mesh, align_to_z=align_to_z, decimals=decimals + 2)
+    fmt = f"{{:.{decimals}f}}"
+    for t, g in enumerate(groups):
+        indices = g['indices']
+        vecs = g['repr_vecs']
+        print(f"JointType T{t:02d} copies={len(indices)} edges={len(vecs)}{' [aligned to +Z]' if align_to_z else ''}:")
+        for k, v in enumerate(vecs):
+            print(f"  u{k}: ({fmt.format(float(v[0]))}, {fmt.format(float(v[1]))}, {fmt.format(float(v[2]))})")
 
 
 def subdivided_icosahedron_mesh(N: int, rotate_x_degrees: float = 0.0) -> Mesh:
@@ -376,6 +422,35 @@ def plot_all_joints_vectors(mesh: Mesh, align_to_z: bool = False, scale: float =
         plot_joint_vectors(mesh, joint_index=idx, align_to_z=align_to_z, scale=scale)
 
 
+def print_deduplicated_edge_lengths(mesh: Mesh, decimals: int = 3, unit: str = 'units') -> None:
+    lengths: Dict[float, int] = {}
+    total_edges = len(mesh.edges)
+    for i, j in mesh.edges:
+        p = mesh.points[i]; q = mesh.points[j]
+        L = float(np.linalg.norm(q - p))
+        key = float(np.round(L, decimals + 3))
+        lengths[key] = lengths.get(key, 0) + 1
+    unique_lengths = len(lengths)
+    print(f"Edge lengths (deduplicated): unique={unique_lengths}, total_edges={total_edges} [{unit}]")
+    for L in sorted(lengths.keys()):
+        print(f"  {L:.{decimals}f} {unit}: count={lengths[L]}")
+
+
+def print_mesh_dimensions(mesh: Mesh, decimals: int = 3, unit: str = 'units') -> None:
+    """Print diameter and radius using the largest axis-aligned extent.
+
+    Assumes mesh is roughly a (hemi)sphere aligned with axes; we take the maximum
+    of the x, y, z ranges as the diameter.
+    """
+    mins = mesh.points.min(axis=0)
+    maxs = mesh.points.max(axis=0)
+    ranges = maxs - mins
+    diameter = float(np.max(ranges))
+    radius = diameter / 2.0
+    fmt = f"{{:.{decimals}f}}"
+    print(f"Mesh dimensions: diameter={fmt.format(diameter)} {unit}, radius={fmt.format(radius)} {unit}")
+
+
 UNIT_TO_METERS = {
     'm': 1.0,
     'meter': 1.0,
@@ -423,24 +498,52 @@ def export_joint_vectors_csv(
                 # tip
                 writer.writerow([edge_id, float(v[0]) * vector_length, float(v[1]) * vector_length, float(v[2]) * vector_length])
 
+
+def export_deduplicated_joint_vectors_csv(
+    mesh: Mesh,
+    output_dir: str = 'output',
+    align_to_z: bool = True,
+    vector_length: float = 0.05,
+    decimals: int = 6,
+) -> None:
+    """Write one CSV per unique joint type with representative vectors.
+
+    The number of copies is encoded in the filename as `_x{copies}`.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    groups = group_joints_by_signature(mesh, align_to_z=align_to_z, decimals=decimals)
+    for t, g in enumerate(groups):
+        vecs = g['repr_vecs']
+        copies = len(g['indices'])
+        path = os.path.join(output_dir, f"joint_{t:03d}_x{copies}.csv")
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            for k, v in enumerate(vecs):
+                edge_id = f"JT{t:03d}_E{k:02d}"
+                writer.writerow([edge_id, 0.0, 0.0, 0.0])
+                writer.writerow([edge_id, float(v[0]) * vector_length, float(v[1]) * vector_length, float(v[2]) * vector_length])
+
 # ---- Example run ----
 if __name__ == "__main__":
-    N = 0  # change me
+    N = 1  # change me
     diameter = 28 * 12 # inches (TODO: model in mm)
     # Rotate the base icosahedron and build Mesh
     mesh = subdivided_icosahedron_mesh(N, rotate_x_degrees=30)
     # Example: keep only points with z >= -0.1
-    mesh = mesh_keep_points_with_z_between(mesh, min_z=-0.5)
+    mesh = mesh_keep_points_with_z_between(mesh, min_z=-0.1)
     # Scale outward by 1.5x
     mesh = mesh_scaled(mesh, scale=diameter / 2)
     plot_mesh(mesh, show_points=True, point_size=6, show_faces=True, face_color='tab:blue', face_alpha=0.2)
     # Print per-face edge lengths and internal angles
     print_mesh_face_metrics(mesh, decimals=3)
-    # Print unit vectors for each joint (vertex)
-    print_joint_unit_vectors(mesh, decimals=3, align_to_z=True)
+    # Print deduplicated joint types and edge length counts
+    print_deduplicated_joint_types(mesh, decimals=3, align_to_z=True)
+    print_mesh_dimensions(mesh, decimals=3, unit='in')
+    print_deduplicated_edge_lengths(mesh, decimals=3, unit='in')
     # Visualize a single joint's rotated vectors
     # plot_joint_vectors(mesh, joint_index=0, align_to_z=True, scale=diameter*0.05)
     # Or visualize all joints (this will open many figures)
     # plot_all_joints_vectors(mesh, align_to_z=True, scale=diameter*0.05)
     # Export CSVs for each joint (aligned vectors) with fixed vector length
-    export_joint_vectors_csv(mesh, output_dir='output', align_to_z=True, vector_length=0.05)
+    # Export deduplicated joint CSVs with count per joint type
+    export_deduplicated_joint_vectors_csv(mesh, output_dir='output', align_to_z=True, vector_length=0.05)
