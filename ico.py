@@ -5,8 +5,14 @@ import csv
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Callable, Dict
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+TAB10_COLOR_NAMES = [
+    'tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
+    'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan',
+]
 
 def _rotation_matrix_x(degrees):
     rad = np.deg2rad(degrees)
@@ -338,11 +344,13 @@ def print_joint_unit_vectors(mesh: Mesh, decimals: int = 3, align_to_z: bool = F
 
 def print_deduplicated_joint_types(mesh: Mesh, decimals: int = 3, align_to_z: bool = True) -> None:
     groups = group_joints_by_signature(mesh, align_to_z=align_to_z, decimals=decimals + 2)
+    # Use the same tab10 name list as plotting
     fmt = f"{{:.{decimals}f}}"
     for t, g in enumerate(groups):
         indices = g['indices']
         vecs = g['repr_vecs']
-        print(f"JointType T{t:02d} copies={len(indices)} edges={len(vecs)}{' [aligned to +Z]' if align_to_z else ''}:")
+        col_name = TAB10_COLOR_NAMES[t % len(TAB10_COLOR_NAMES)]
+        print(f"JointType T{t:02d} copies={len(indices)} edges={len(vecs)} color={col_name}{' [aligned to +Z]' if align_to_z else ''}:")
         for k, v in enumerate(vecs):
             print(f"  u{k}: ({fmt.format(float(v[0]))}, {fmt.format(float(v[1]))}, {fmt.format(float(v[2]))})")
 
@@ -365,18 +373,54 @@ def plot_icosphere(P, edges, show_points=True, point_size=100):
     plt.show()
 
 
-def plot_mesh(mesh: Mesh, show_points: bool = True, point_size: int = 100, show_faces: bool = False, face_color: str = 'tab:blue', face_alpha: float = 0.15):
+def _group_edges_by_length(mesh: Mesh, decimals: int = 6) -> List[Tuple[float, List[Tuple[int, int]]]]:
+    """Return list of (length_key, edges) grouped by rounded length."""
+    groups: Dict[float, List[Tuple[int, int]]] = {}
+    for i, j in mesh.edges:
+        L = float(np.linalg.norm(mesh.points[j] - mesh.points[i]))
+        key = float(np.round(L, decimals))
+        groups.setdefault(key, []).append((i, j))
+    return sorted(((k, v) for k, v in groups.items()), key=lambda kv: kv[0])
+
+
+def plot_mesh(
+    mesh: Mesh,
+    show_points: bool = True,
+    point_size: int = 180,
+    show_faces: bool = False,
+    face_color: str = 'tab:blue',
+    face_alpha: float = 0.15,
+    color_edges_by_length: bool = False,
+    length_decimals: int = 6,
+    color_points_by_joint_type: bool = False,
+    joint_decimals: int = 6,
+    joint_align_to_z: bool = True,
+):
     fig = plt.figure(figsize=(8,8))
     ax = fig.add_subplot(111, projection='3d')
     ax.set_box_aspect((1,1,1))
     if show_points:
-        ax.scatter(mesh.points[:,0], mesh.points[:,1], mesh.points[:,2], s=50.0, color='r')
+        if color_points_by_joint_type:
+            groups = group_joints_by_signature(mesh, align_to_z=joint_align_to_z, decimals=joint_decimals)
+            for gi, g in enumerate(groups):
+                col_name = TAB10_COLOR_NAMES[gi % len(TAB10_COLOR_NAMES)]
+                pts = mesh.points[np.array(g['indices'], dtype=int)]
+                ax.scatter(pts[:,0], pts[:,1], pts[:,2], s=float(point_size), color=col_name)
+        else:
+            ax.scatter(mesh.points[:,0], mesh.points[:,1], mesh.points[:,2], s=float(point_size), color='r')
     if show_faces and mesh.faces:
         triangles = [mesh.points[[a, b, c]] for (a, b, c) in mesh.faces]
         poly = Poly3DCollection(triangles, facecolors=face_color, edgecolors='none', alpha=face_alpha)
         ax.add_collection3d(poly)
-    for i, j in mesh.edges:
-        ax.plot([mesh.points[i,0],mesh.points[j,0]], [mesh.points[i,1],mesh.points[j,1]], [mesh.points[i,2],mesh.points[j,2]], color='k', linewidth=1.2)
+    if color_edges_by_length:
+        groups = _group_edges_by_length(mesh, decimals=length_decimals)
+        for gi, (Lkey, edges) in enumerate(groups):
+            col_name = TAB10_COLOR_NAMES[gi % len(TAB10_COLOR_NAMES)]
+            for i, j in edges:
+                ax.plot([mesh.points[i,0],mesh.points[j,0]], [mesh.points[i,1],mesh.points[j,1]], [mesh.points[i,2],mesh.points[j,2]], color=col_name, linewidth=1.6)
+    else:
+        for i, j in mesh.edges:
+            ax.plot([mesh.points[i,0],mesh.points[j,0]], [mesh.points[i,1],mesh.points[j,1]], [mesh.points[i,2],mesh.points[j,2]], color='k', linewidth=1.2)
     ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
     set_axes_equal(ax)
     ax.set_title('Mesh')
@@ -432,8 +476,10 @@ def print_deduplicated_edge_lengths(mesh: Mesh, decimals: int = 3, unit: str = '
         lengths[key] = lengths.get(key, 0) + 1
     unique_lengths = len(lengths)
     print(f"Edge lengths (deduplicated): unique={unique_lengths}, total_edges={total_edges} [{unit}]")
-    for L in sorted(lengths.keys()):
-        print(f"  {L:.{decimals}f} {unit}: count={lengths[L]}")
+    # Assign colors consistently with plot: order by length and map to tab10 names
+    for idx, L in enumerate(sorted(lengths.keys())):
+        col_name = TAB10_COLOR_NAMES[idx % len(TAB10_COLOR_NAMES)]
+        print(f"  {L:.{decimals}f} {unit}: count={lengths[L]} color={col_name}")
 
 
 def print_mesh_dimensions(mesh: Mesh, decimals: int = 3, unit: str = 'units') -> None:
@@ -533,7 +579,19 @@ if __name__ == "__main__":
     mesh = mesh_keep_points_with_z_between(mesh, min_z=-0.1)
     # Scale outward by 1.5x
     mesh = mesh_scaled(mesh, scale=diameter / 2)
-    plot_mesh(mesh, show_points=True, point_size=6, show_faces=True, face_color='tab:blue', face_alpha=0.2)
+    plot_mesh(
+        mesh,
+        show_points=True,
+        point_size=240,
+        show_faces=True,
+        face_color='tab:blue',
+        face_alpha=0.2,
+        color_edges_by_length=True,
+        length_decimals=3,
+        color_points_by_joint_type=True,
+        joint_decimals=5,
+        joint_align_to_z=True,
+    )
     # Print per-face edge lengths and internal angles
     print_mesh_face_metrics(mesh, decimals=3)
     # Print deduplicated joint types and edge length counts
