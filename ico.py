@@ -267,6 +267,51 @@ def print_mesh_face_metrics(mesh: Mesh, decimals: int = 3) -> None:
         print(f"Face {idx:03d} verts=({i},{j},{k}) lengths={lengths_str} angles={angles_str}")
 
 
+def _face_rotation_invariant_signature(lengths: Tuple[float, float, float], decimals: int = 6) -> Tuple[float, float, float]:
+    """Return a rotation/order invariant signature for a triangle: sorted rounded edge lengths."""
+    a, b, c = lengths
+    sig = tuple(sorted((float(np.round(a, decimals)), float(np.round(b, decimals)), float(np.round(c, decimals)))))
+    return sig  # type: ignore[return-value]
+
+
+def group_faces_by_signature(mesh: Mesh, decimals: int = 6):
+    """Group faces by rotation-invariant signature of edge lengths.
+
+    Returns list of dicts: { 'signature': sig, 'indices': [...], 'repr_metrics': (lengths, angles), 'repr_face': (i,j,k) }.
+    """
+    if not mesh.faces:
+        return []
+    metrics = compute_face_lengths_and_angles(mesh.points, mesh.faces)
+    groups: Dict[Tuple[float, float, float], Dict] = {}
+    for idx, (lens, angs) in enumerate(metrics):
+        sig = _face_rotation_invariant_signature(lens, decimals=decimals)
+        if sig not in groups:
+            groups[sig] = {'signature': sig, 'indices': [idx], 'repr_metrics': (lens, angs), 'repr_face': mesh.faces[idx]}
+        else:
+            groups[sig]['indices'].append(idx)
+    keys_sorted = sorted(groups.keys())
+    return [groups[k] for k in keys_sorted]
+
+
+def print_deduplicated_faces(mesh: Mesh, decimals: int = 3, face_decimals: Optional[int] = None) -> None:
+    # Use same grouping precision as plot by default
+    grouping_decimals = decimals if face_decimals is None else face_decimals
+    groups = group_faces_by_signature(mesh, decimals=grouping_decimals)
+    if not groups:
+        print("No faces to analyze.")
+        return
+    fmt = f"{{:.{decimals}f}}"
+    total_faces = len(mesh.faces) if mesh.faces else 0
+    print(f"Faces (deduplicated): unique={len(groups)}, total_faces={total_faces}")
+    for t, g in enumerate(groups):
+        (l_ab, l_bc, l_ca), (ang_a, ang_b, ang_c) = g['repr_metrics']
+        lengths_str = f"(AB={fmt.format(l_ab)}, BC={fmt.format(l_bc)}, CA={fmt.format(l_ca)})"
+        angles_str = f"(A={fmt.format(ang_a)}°, B={fmt.format(ang_b)}°, C={fmt.format(ang_c)}°)"
+        copies = len(g['indices'])
+        col_name = TAB10_COLOR_NAMES[t % len(TAB10_COLOR_NAMES)]
+        print(f"FaceType F{t:02d} copies={copies} color={col_name} lengths={lengths_str} angles={angles_str}")
+
+
 def compute_joint_unit_vectors(points: np.ndarray, edges: List[Tuple[int, int]], align_to_z: bool = False):
     """Return list where entry i is a list of unit vectors along each incident edge at vertex i.
 
@@ -395,6 +440,8 @@ def plot_mesh(
     color_points_by_joint_type: bool = False,
     joint_decimals: int = 6,
     joint_align_to_z: bool = True,
+    color_faces_by_type: bool = False,
+    face_decimals: int = 6,
 ):
     fig = plt.figure(figsize=(8,8))
     ax = fig.add_subplot(111, projection='3d')
@@ -409,9 +456,19 @@ def plot_mesh(
         else:
             ax.scatter(mesh.points[:,0], mesh.points[:,1], mesh.points[:,2], s=float(point_size), color='r')
     if show_faces and mesh.faces:
-        triangles = [mesh.points[[a, b, c]] for (a, b, c) in mesh.faces]
-        poly = Poly3DCollection(triangles, facecolors=face_color, edgecolors='none', alpha=face_alpha)
-        ax.add_collection3d(poly)
+        if color_faces_by_type:
+            groups = group_faces_by_signature(mesh, decimals=face_decimals)
+            # Build triangles per group and add each with its own color
+            for gi, g in enumerate(groups):
+                col_name = TAB10_COLOR_NAMES[gi % len(TAB10_COLOR_NAMES)]
+                tris = [mesh.points[list(face)] for idx in g['indices'] for face in [mesh.faces[idx]]]
+                if tris:
+                    poly = Poly3DCollection(tris, facecolors=col_name, edgecolors='none', alpha=face_alpha)
+                    ax.add_collection3d(poly)
+        else:
+            triangles = [mesh.points[[a, b, c]] for (a, b, c) in mesh.faces]
+            poly = Poly3DCollection(triangles, facecolors=face_color, edgecolors='none', alpha=face_alpha)
+            ax.add_collection3d(poly)
     if color_edges_by_length:
         groups = _group_edges_by_length(mesh, decimals=length_decimals)
         for gi, (Lkey, edges) in enumerate(groups):
@@ -591,9 +648,11 @@ if __name__ == "__main__":
         color_points_by_joint_type=True,
         joint_decimals=5,
         joint_align_to_z=True,
+        color_faces_by_type=True,
+        face_decimals=3,
     )
-    # Print per-face edge lengths and internal angles
-    print_mesh_face_metrics(mesh, decimals=3)
+    # Deduplicated face types
+    print_deduplicated_faces(mesh, decimals=3, face_decimals=3)
     # Print deduplicated joint types and edge length counts
     print_deduplicated_joint_types(mesh, decimals=3, align_to_z=True)
     print_mesh_dimensions(mesh, decimals=3, unit='in')
